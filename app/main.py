@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Union
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.models import (
@@ -46,6 +47,14 @@ app = FastAPI(
     description="LaTeX to PDF compilation service for TexForge",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
