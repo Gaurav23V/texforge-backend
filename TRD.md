@@ -1,0 +1,560 @@
+Good. Python is the right call for this phase. You're building a product, not benchmarking a load balancer.
+
+Below is a **detailed Technical Requirements Document (TRD)** for the LaTeX Visualizer system.
+
+This is implementation-grade. You can drop this into your repo as `TRD.md`.
+
+---
+
+# Technical Requirements Document (TRD)
+
+## Project: Personal LaTeX Visualizer (Single-File PDF Compiler)
+
+---
+
+# 1. System Overview
+
+## 1.1 Objective
+
+Build a web-based LaTeX editor that:
+
+* Allows Google login
+* Supports single-file LaTeX projects
+* Compiles `.tex` into PDF
+* Displays PDF preview
+* Allows PDF download
+* Supports view-only sharing
+
+The system consists of:
+
+* **Frontend**: Next.js (Vercel)
+* **Database/Auth/Storage**: Supabase
+* **Compile Service**: FastAPI (Render), containerized with LaTeX toolchain
+
+---
+
+# 2. High-Level Architecture
+
+```
+
+User
+↓
+Next.js (Vercel)
+↓
+Supabase (Auth + Postgres + Storage)
+↓
+FastAPI Compile Service (Render)
+↓
+Supabase Storage (PDF output)
+
+```
+
+---
+
+# 3. Functional Scope
+
+## 3.1 Supported Features (MVP)
+
+* Google login
+* Create / list projects
+* Single `.tex` file per project
+* Manual compile
+* PDF preview
+* Download button
+* View-only share link
+* Compiler error log display
+* Autosave `.tex`
+
+## 3.2 Not Supported (MVP)
+
+* Multi-file projects
+* File uploads (images, bib)
+* Real-time collaboration
+* Bibliography workflow
+* Custom TeX engine selection
+
+---
+
+# 4. Backend: FastAPI Compile Service
+
+---
+
+# 4.1 Responsibilities
+
+The compile service MUST:
+
+1. Accept compile request
+2. Validate user authorization
+3. Fetch LaTeX source
+4. Compile in sandbox
+5. Enforce strict timeout
+6. Capture logs
+7. Upload PDF to Supabase Storage
+8. Update compile status in DB
+9. Return structured response
+
+---
+
+# 5. API Design
+
+Base URL:
+
+```
+
+[https://compiler.yourdomain.com](https://compiler.yourdomain.com)
+
+````
+
+---
+
+## 5.1 Health Check
+
+### GET `/health`
+
+Response:
+
+```json
+{
+  "status": "ok"
+}
+````
+
+---
+
+## 5.2 Compile Endpoint (Synchronous)
+
+### POST `/compile`
+
+### Request Body
+
+```json
+{
+  "project_id": "uuid",
+  "force": false
+}
+```
+
+Optional alternative (later):
+
+```json
+{
+  "project_id": "uuid",
+  "tex": "raw latex string"
+}
+```
+
+---
+
+### Headers
+
+Authorization:
+
+```
+Bearer <Supabase JWT>
+```
+
+---
+
+### Success Response
+
+```json
+{
+  "status": "success",
+  "pdf_url": "https://storage.supabase.co/.../latest.pdf",
+  "compiled_at": "ISO_TIMESTAMP"
+}
+```
+
+---
+
+### Failure Response
+
+```json
+{
+  "status": "error",
+  "error_type": "latex_compile_error",
+  "log": "truncated compiler log",
+  "compiled_at": "ISO_TIMESTAMP"
+}
+```
+
+---
+
+# 6. Compile Execution Flow
+
+---
+
+## 6.1 Compile Steps
+
+1. Validate JWT with Supabase public key
+2. Verify project ownership
+3. Create temp directory:
+
+   ```
+   /tmp/compile-{uuid}
+   ```
+4. Write `main.tex`
+5. Execute:
+
+```
+latexmk -pdf \
+  -interaction=nonstopmode \
+  -halt-on-error \
+  -file-line-error \
+  -no-shell-escape \
+  main.tex
+```
+
+6. Timeout: 15 seconds max
+7. Capture:
+
+   * stdout
+   * stderr
+   * exit code
+8. If success:
+
+   * upload `main.pdf`
+9. Always store logs
+10. Delete temp directory
+
+---
+
+# 7. Security Requirements
+
+---
+
+## 7.1 Sandbox Constraints
+
+* `-no-shell-escape` mandatory
+* No network access from container
+* Read-only filesystem except `/tmp`
+* Hard timeout: 15 seconds
+* Max concurrent compiles: configurable (default 2)
+
+---
+
+## 7.2 Abuse Protection
+
+* Rate limit:
+
+  * 20 compiles/hour per user
+* Maximum `.tex` size: 1MB
+* Reject:
+
+  * `\write18`
+  * `\input{http`
+  * `\include{http`
+* Container memory limit: 512MB minimum
+
+---
+
+# 8. Concurrency Model
+
+---
+
+## 8.1 Semaphore-Based Limiter
+
+FastAPI must implement:
+
+```python
+MAX_CONCURRENT_COMPILES = 2
+semaphore = asyncio.Semaphore(MAX_CONCURRENT_COMPILES)
+```
+
+All compile requests must acquire semaphore.
+
+If queue time exceeds 10 seconds → return 429.
+
+---
+
+# 9. Database Schema (Supabase)
+
+---
+
+## 9.1 projects
+
+```sql
+CREATE TABLE projects (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id UUID REFERENCES auth.users(id),
+  name TEXT NOT NULL,
+  tex TEXT NOT NULL,
+  updated_at TIMESTAMP DEFAULT now(),
+  created_at TIMESTAMP DEFAULT now()
+);
+```
+
+---
+
+## 9.2 compiles
+
+```sql
+CREATE TABLE compiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id),
+  status TEXT NOT NULL,
+  log TEXT,
+  pdf_path TEXT,
+  compiled_at TIMESTAMP DEFAULT now()
+);
+```
+
+---
+
+## 9.3 shares
+
+```sql
+CREATE TABLE shares (
+  token TEXT PRIMARY KEY,
+  project_id UUID REFERENCES projects(id),
+  created_at TIMESTAMP DEFAULT now(),
+  revoked_at TIMESTAMP
+);
+```
+
+---
+
+# 10. Storage Design
+
+Supabase bucket:
+
+```
+project-pdfs
+```
+
+File path:
+
+```
+project-pdfs/{project_id}/latest.pdf
+```
+
+Policy:
+
+* Private
+* Signed URLs generated by backend
+* Share route generates temporary signed URL
+
+---
+
+# 11. Frontend Behavior Requirements
+
+---
+
+## 11.1 Editor State Machine
+
+States:
+
+* idle
+* saving
+* compiling
+* success
+* error
+
+---
+
+## 11.2 Compile Button Behavior
+
+* Disable while compiling
+* Show spinner
+* On success:
+
+  * reload PDF iframe
+* On failure:
+
+  * show error log panel
+  * keep last successful PDF visible
+
+---
+
+## 11.3 PDF Preview
+
+Rendered via:
+
+Option A:
+
+* `<iframe src={signed_pdf_url}>`
+
+Option B:
+
+* pdf.js
+
+Download button:
+
+* Direct signed URL download
+
+---
+
+# 12. Logging & Observability
+
+---
+
+## 12.1 Backend Logging
+
+Must log:
+
+* request_id
+* user_id
+* project_id
+* compile duration
+* exit code
+* timeout event
+
+---
+
+## 12.2 Log Truncation
+
+Return max:
+
+```
+20,000 characters
+```
+
+Store full log in DB.
+
+---
+
+# 13. Deployment Requirements
+
+---
+
+## 13.1 Dockerfile Requirements
+
+Base:
+
+```
+python:3.11-slim
+```
+
+Install:
+
+* texlive-latex-base
+* texlive-latex-extra
+* latexmk
+
+Expose:
+
+```
+8000
+```
+
+Command:
+
+```
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+---
+
+## 13.2 Render Configuration
+
+* Instance: smallest with 512MB RAM
+* No autoscaling (MVP)
+* Environment variables:
+
+  * SUPABASE_URL
+  * SUPABASE_SERVICE_KEY
+  * SUPABASE_JWT_SECRET
+  * MAX_CONCURRENT_COMPILES
+
+---
+
+# 14. Failure Scenarios
+
+---
+
+## 14.1 Timeout
+
+Return:
+
+```json
+{
+  "status": "error",
+  "error_type": "timeout"
+}
+```
+
+---
+
+## 14.2 LaTeX Syntax Error
+
+Return:
+
+* `status = error`
+* Include truncated log
+
+---
+
+## 14.3 Supabase Upload Failure
+
+* Return error
+* Do not delete local PDF until retry attempt
+* Log incident
+
+---
+
+# 15. Future Extensions (Not MVP)
+
+* Async compile queue (Redis + worker)
+* Version history
+* Multi-file support
+* Image upload
+* AI log explanation
+* Multi-user collaboration
+* Compile caching (hash tex → skip compile)
+
+---
+
+# 16. Performance Targets (MVP)
+
+* Compile request latency: ≤ 15s
+* Cold start: ≤ 3s
+* Concurrent compiles supported: 2
+* 95th percentile compile time: ≤ 8s for typical resume
+
+---
+
+# 17. Non-Functional Requirements
+
+* System must not allow arbitrary shell execution
+* System must not expose filesystem
+* System must not allow network calls from TeX
+* Must survive malformed LaTeX without crashing service
+* Must preserve last successful PDF
+
+---
+
+# 18. MVP Completion Criteria
+
+The MVP is complete when:
+
+* A user can login
+* Create a project
+* Paste resume LaTeX
+* Compile successfully
+* View rendered PDF
+* Download PDF
+* Share link renders PDF view-only
+* Compile errors are visible and understandable
+
+---
+
+# Final Recommendation
+
+Do NOT overengineer queues or scaling yet.
+
+Start with:
+
+* synchronous compile
+* semaphore concurrency limit
+* strict timeout
+* strong sandbox flags
+
+You're building a usable tool first. Scale later.
+
+---
+
+If you'd like next, I can:
+
+* Write the actual FastAPI service skeleton
+* Write the Dockerfile
+* Or draft the Frontend architecture spec to pair with this TRD
