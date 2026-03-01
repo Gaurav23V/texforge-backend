@@ -2,6 +2,12 @@
 
 LaTeX to PDF compilation service for TexForge. Accepts LaTeX source, compiles it in a sandboxed environment, and returns a signed PDF URL.
 
+## Live Demo
+
+- **Backend API**: https://texforge-backend-0ap1.onrender.com
+- **Frontend App**: https://texforge-frontend-lsmd.onrender.com
+- **Health Check**: https://texforge-backend-0ap1.onrender.com/health
+
 ## What It Does
 
 - **POST /compile**: Compiles LaTeX to PDF
