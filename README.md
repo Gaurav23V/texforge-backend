@@ -20,7 +20,7 @@ LaTeX to PDF compilation service for TexForge. Accepts LaTeX source, compiles it
 1. Install TeX toolchain:
    ```bash
    # Ubuntu/Debian
-   sudo apt-get install texlive-latex-base texlive-latex-extra latexmk
+   sudo apt-get install texlive-latex-base texlive-latex-extra texlive-fonts-recommended latexmk
 
    # macOS
    brew install --cask mactex-no-gui
