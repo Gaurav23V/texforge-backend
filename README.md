@@ -26,11 +26,9 @@ LaTeX to PDF compilation service for TexForge. Accepts LaTeX source, compiles it
    brew install --cask mactex-no-gui
    ```
 
-2. Create virtual environment and install dependencies:
+2. Install dependencies with uv:
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
+   uv sync
    ```
 
 3. Set up environment variables:
@@ -41,7 +39,7 @@ LaTeX to PDF compilation service for TexForge. Accepts LaTeX source, compiles it
 
 4. Run the server:
    ```bash
-   uvicorn app.main:app --reload
+   uv run uvicorn app.main:app --reload
    ```
 
 ### Docker
@@ -67,16 +65,16 @@ docker run -p 8000:8000 --env-file .env texforge-backend
 
 ```bash
 # Install dev dependencies
-pip install -r requirements.txt
+uv sync --extra dev
 
 # Run all tests
-pytest
+uv run pytest
 
 # Run with verbose output
-pytest -v
+uv run pytest -v
 
 # Run specific test file
-pytest tests/test_security.py
+uv run pytest tests/test_security.py
 ```
 
 ## Supabase Setup

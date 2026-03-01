@@ -9,5 +9,6 @@ services:
       - MAX_CONCURRENT_COMPILES=${MAX_CONCURRENT_COMPILES:-2}
     volumes:
       - ./app:/app/app:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
     tmpfs:
       - /tmp:size=100M
