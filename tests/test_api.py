@@ -23,14 +23,14 @@ class TestHealthEndpoint:
 class TestCompileEndpoint:
     @pytest.fixture
     def mock_supabase(self):
-        with patch("app.main.get_project_tex") as mock_get_tex, \
-             patch("app.main.save_compile_result") as mock_save, \
-             patch("app.main.upload_pdf") as mock_upload, \
-             patch("app.main.create_signed_url") as mock_sign:
-            mock_get_tex.return_value = AsyncMock(return_value=r"\documentclass{article}\begin{document}Test\end{document}")()
-            mock_save.return_value = AsyncMock(return_value=True)()
-            mock_upload.return_value = AsyncMock(return_value=True)()
-            mock_sign.return_value = AsyncMock(return_value="https://storage.supabase.co/signed/url")()
+        with patch("app.supabase_client.get_project_tex") as mock_get_tex, \
+             patch("app.supabase_client.save_compile_result") as mock_save, \
+             patch("app.supabase_client.upload_pdf") as mock_upload, \
+             patch("app.supabase_client.create_signed_url") as mock_sign:
+            mock_get_tex.return_value = r"\documentclass{article}\begin{document}Test\end{document}"
+            mock_save.return_value = True
+            mock_upload.return_value = True
+            mock_sign.return_value = "https://storage.supabase.co/signed/url"
             yield {
                 "get_tex": mock_get_tex,
                 "save": mock_save,
@@ -42,14 +42,16 @@ class TestCompileEndpoint:
         """Test compile with tex provided in request body."""
         simple_tex = r"\documentclass{article}\begin{document}Hello\end{document}"
 
-        with patch("app.main.run_compile") as mock_compile:
-            mock_compile.return_value = AsyncMock(return_value={
-                "success": True,
-                "error_type": None,
-                "full_log": "Compile log",
-                "truncated_log": "Compile log",
-                "pdf_bytes": b"%PDF-1.4 content",
-            })()
+        with patch("app.compile.run_compile") as mock_compile:
+            async def mock_run(*args, **kwargs):
+                return {
+                    "success": True,
+                    "error_type": None,
+                    "full_log": "Compile log",
+                    "truncated_log": "Compile log",
+                    "pdf_bytes": b"%PDF-1.4 content",
+                }
+            mock_compile.side_effect = mock_run
 
             response = client.post("/compile", json={
                 "project_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -94,14 +96,16 @@ class TestCompileEndpoint:
         """Test that LaTeX errors are returned properly."""
         bad_tex = r"\documentclass{article}\begin{document}\badcommand\end{document}"
 
-        with patch("app.main.run_compile") as mock_compile:
-            mock_compile.return_value = AsyncMock(return_value={
-                "success": False,
-                "error_type": ErrorType.LATEX_COMPILE_ERROR,
-                "full_log": "! Undefined control sequence.",
-                "truncated_log": "! Undefined control sequence.",
-                "pdf_bytes": None,
-            })()
+        with patch("app.compile.run_compile") as mock_compile:
+            async def mock_run(*args, **kwargs):
+                return {
+                    "success": False,
+                    "error_type": ErrorType.LATEX_COMPILE_ERROR,
+                    "full_log": "! Undefined control sequence.",
+                    "truncated_log": "! Undefined control sequence.",
+                    "pdf_bytes": None,
+                }
+            mock_compile.side_effect = mock_run
 
             response = client.post("/compile", json={
                 "project_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -116,8 +120,8 @@ class TestCompileEndpoint:
 
     def test_compile_project_not_found(self, client):
         """Test that missing project returns error."""
-        with patch("app.main.get_project_tex") as mock_get_tex:
-            mock_get_tex.return_value = AsyncMock(return_value=None)()
+        with patch("app.supabase_client.get_project_tex") as mock_get_tex:
+            mock_get_tex.return_value = None
 
             response = client.post("/compile", json={
                 "project_id": "nonexistent-project-id",
@@ -131,16 +135,18 @@ class TestCompileEndpoint:
     def test_compile_storage_error(self, client, mock_supabase):
         """Test that storage upload failure returns error."""
         simple_tex = r"\documentclass{article}\begin{document}Test\end{document}"
-        mock_supabase["upload"].return_value = AsyncMock(return_value=False)()
+        mock_supabase["upload"].return_value = False
 
-        with patch("app.main.run_compile") as mock_compile:
-            mock_compile.return_value = AsyncMock(return_value={
-                "success": True,
-                "error_type": None,
-                "full_log": "Compile log",
-                "truncated_log": "Compile log",
-                "pdf_bytes": b"%PDF-1.4 content",
-            })()
+        with patch("app.compile.run_compile") as mock_compile:
+            async def mock_run(*args, **kwargs):
+                return {
+                    "success": True,
+                    "error_type": None,
+                    "full_log": "Compile log",
+                    "truncated_log": "Compile log",
+                    "pdf_bytes": b"%PDF-1.4 content",
+                }
+            mock_compile.side_effect = mock_run
 
             response = client.post("/compile", json={
                 "project_id": "550e8400-e29b-41d4-a716-446655440000",

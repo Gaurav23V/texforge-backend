@@ -22,15 +22,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-settings = get_settings()
-compile_semaphore: asyncio.Semaphore
+_compile_semaphore: asyncio.Semaphore | None = None
+
+
+def get_compile_semaphore() -> asyncio.Semaphore:
+    """Get or create the compile semaphore."""
+    global _compile_semaphore
+    if _compile_semaphore is None:
+        settings = get_settings()
+        _compile_semaphore = asyncio.Semaphore(settings.max_concurrent_compiles)
+        logger.info(f"Initialized compile semaphore with {settings.max_concurrent_compiles} slots")
+    return _compile_semaphore
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global compile_semaphore
-    compile_semaphore = asyncio.Semaphore(settings.max_concurrent_compiles)
-    logger.info(f"Initialized compile semaphore with {settings.max_concurrent_compiles} slots")
+    get_compile_semaphore()
     yield
 
 
@@ -53,12 +60,14 @@ async def compile_tex(request: CompileRequest):
     from app.compile import run_compile
     from app.supabase_client import get_project_tex, save_compile_result, upload_pdf, create_signed_url
 
+    settings = get_settings()
     request_id = f"req-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
     logger.info(f"[{request_id}] Compile request for project_id={request.project_id}")
 
+    semaphore = get_compile_semaphore()
     try:
         async with asyncio.timeout(settings.semaphore_wait_timeout_seconds):
-            await compile_semaphore.acquire()
+            await semaphore.acquire()
     except asyncio.TimeoutError:
         logger.warning(f"[{request_id}] Semaphore wait timeout - too many concurrent compiles")
         raise HTTPException(status_code=429, detail="Too many concurrent compile requests. Try again later.")
@@ -146,4 +155,4 @@ async def compile_tex(request: CompileRequest):
             )
 
     finally:
-        compile_semaphore.release()
+        semaphore.release()
