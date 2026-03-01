@@ -1,0 +1,13 @@
+services:
+  compiler:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - MAX_CONCURRENT_COMPILES=${MAX_CONCURRENT_COMPILES:-2}
+    volumes:
+      - ./app:/app/app:ro
+    tmpfs:
+      - /tmp:size=100M
