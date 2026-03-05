@@ -16,6 +16,8 @@ class ErrorType(str, Enum):
     DANGEROUS_CONTENT = "dangerous_content"
     STORAGE_ERROR = "storage_error"
     PROJECT_NOT_FOUND = "project_not_found"
+    COMPILER_UNAVAILABLE = "compiler_unavailable"
+    CANCELLED = "cancelled"
 
 
 class CompileRequest(BaseModel):
@@ -39,3 +41,8 @@ class CompileErrorResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
+
+
+class LatestPdfResponse(BaseModel):
+    pdf_url: Optional[str] = None
+    compiled_at: Optional[datetime] = None

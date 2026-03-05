@@ -11,13 +11,21 @@ LaTeX to PDF compilation service for TexForge. Accepts LaTeX source, compiles it
 ## What It Does
 
 - **POST /compile**: Compiles LaTeX to PDF
-  - Accepts `project_id` (fetches tex from DB) or inline `tex` content
-  - Runs `latexmk` in a sandboxed temp directory with `-no-shell-escape`
+  - Accepts `project_id` and optional inline `tex` content
+  - Uses inline `tex` as source-of-truth when provided
+  - Adaptive engine strategy: fast `pdflatex` path with `latexmk` fallback
+  - Caches compile artifacts with deterministic hash keys
+  - Coalesces duplicate in-flight requests and cancels stale same-project requests
+  - Reuses per-project working directories to speed incremental compiles
+  - Runs compile concurrency control only around compile subprocess execution
   - Enforces 15s timeout and blocks dangerous patterns (`\write18`, etc.)
-  - Uploads PDF to Supabase Storage and returns signed URL
+  - Uploads both immutable artifact and project `latest.pdf` alias
+  - Reuses valid signed URLs where possible to reduce signing overhead
   - Stores compile logs in database
+  - Emits stage-wise timing metrics in logs (`fetch`, `validate`, `queue_wait`, `compile`, `upload`, `db_save`, `sign`, `total`)
 
 - **GET /health**: Health check endpoint
+- **GET /projects/{project_id}/latest-pdf**: Returns signed URL for latest successful compile (if available)
 
 ## Quick Start
 
@@ -66,6 +74,18 @@ docker run -p 8000:8000 --env-file .env texforge-backend
 | `SUPABASE_URL` | Yes | - | Your Supabase project URL |
 | `SUPABASE_SERVICE_KEY` | Yes | - | Supabase service role key |
 | `MAX_CONCURRENT_COMPILES` | No | 2 | Max parallel compiles |
+| `COMPILE_TIMEOUT_SECONDS` | No | 15 | Hard timeout per compile |
+| `SEMAPHORE_WAIT_TIMEOUT_SECONDS` | No | 10 | Max queue wait before 429 |
+| `SIGNED_URL_TTL_SECONDS` | No | 3600 | Signed URL expiry in seconds |
+| `ENABLE_COMPILE_CACHE` | No | true | Enable content-hash compile cache |
+| `ENABLE_WORKDIR_CACHE` | No | true | Enable per-project persistent workdirs |
+| `ENABLE_ADAPTIVE_ENGINE` | No | true | Prefer `pdflatex` with fallback |
+| `ENABLE_COMPILE_COALESCING` | No | true | Coalesce/cancel in-flight requests |
+| `ENABLE_STARTUP_WARMUP` | No | false | Run warmup compile during startup |
+| `ENABLE_REUSE_SIGNED_URL` | No | true | Reuse in-memory signed URLs until expiry |
+| `COMPILE_CACHE_MAX_ENTRIES` | No | 500 | In-memory compile cache size |
+| `WORKDIR_CACHE_ROOT` | No | `/tmp/texforge-workdirs` | Root directory for project workdirs |
+| `WORKDIR_CACHE_MAX_PROJECTS` | No | 30 | Max persisted project workdirs |
 
 ## Running Tests
 
@@ -81,6 +101,9 @@ uv run pytest -v
 
 # Run specific test file
 uv run pytest tests/test_security.py
+
+# Run benchmark script against any compiler URL
+uv run python scripts/benchmark_compile.py --url http://localhost:8000 --runs 5
 ```
 
 ## Supabase Setup
@@ -109,6 +132,14 @@ Or create manually in Supabase Dashboard:
 - `pdf_path` (TEXT)
 - `compiled_at` (TIMESTAMPTZ)
 
+**compile_artifacts**
+- `compile_key` (TEXT, PK)
+- `project_id` (UUID, FK to projects)
+- `pdf_path` (TEXT)
+- `engine` (TEXT)
+- `flags` (TEXT)
+- `created_at`, `updated_at` (TIMESTAMPTZ)
+
 **shares**
 - `token` (TEXT, PK)
 - `project_id` (UUID, FK to projects)
@@ -119,6 +150,7 @@ Or create manually in Supabase Dashboard:
 Create a private bucket named `project-pdfs`. The backend uploads PDFs to:
 ```
 project-pdfs/{project_id}/latest.pdf
+project-pdfs/{project_id}/artifacts/{compile_key}.pdf
 ```
 
 ## API Usage
@@ -142,6 +174,12 @@ curl -X POST http://localhost:8000/compile \
   -d '{"project_id": "550e8400-e29b-41d4-a716-446655440000"}'
 ```
 
+### Fetch latest compiled PDF URL
+
+```bash
+curl "http://localhost:8000/projects/550e8400-e29b-41d4-a716-446655440000/latest-pdf"
+```
+
 ### Success Response
 
 ```json
@@ -162,6 +200,16 @@ curl -X POST http://localhost:8000/compile \
   "compiled_at": "2024-01-15T10:30:00Z"
 }
 ```
+
+Possible `error_type` values include:
+- `latex_compile_error`
+- `timeout`
+- `validation_error`
+- `dangerous_content`
+- `storage_error`
+- `project_not_found`
+- `compiler_unavailable`
+- `cancelled`
 
 ## Security
 

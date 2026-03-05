@@ -132,3 +132,19 @@ class TestRunCompile:
         assert len(result["full_log"]) == 50000
         assert len(result["truncated_log"]) < 50000
         assert "truncated" in result["truncated_log"].lower()
+
+    @pytest.mark.asyncio
+    async def test_missing_compiler_binary_returns_compiler_unavailable(self, simple_tex):
+        """Test that missing compiler binary returns compiler_unavailable error."""
+        with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError("missing")):
+            with patch("shutil.rmtree"):
+                result = await run_compile(
+                    tex_content=simple_tex,
+                    timeout_seconds=15,
+                    max_log_chars=20000,
+                    engine="pdflatex",
+                )
+
+        assert result["success"] is False
+        assert result["error_type"] == ErrorType.COMPILER_UNAVAILABLE
+        assert "toolchain" in result["full_log"].lower()

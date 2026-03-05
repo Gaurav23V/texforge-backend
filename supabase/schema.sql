@@ -21,6 +21,17 @@ CREATE TABLE IF NOT EXISTS compiles (
     compiled_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Compile artifacts table: maps deterministic compile keys to storage objects.
+CREATE TABLE IF NOT EXISTS compile_artifacts (
+    compile_key TEXT PRIMARY KEY,
+    project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+    pdf_path TEXT NOT NULL,
+    engine TEXT NOT NULL,
+    flags TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- Shares table: stores view-only share tokens
 CREATE TABLE IF NOT EXISTS shares (
     token TEXT PRIMARY KEY,
@@ -32,6 +43,7 @@ CREATE TABLE IF NOT EXISTS shares (
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_projects_owner_id ON projects(owner_id);
 CREATE INDEX IF NOT EXISTS idx_compiles_project_id ON compiles(project_id);
+CREATE INDEX IF NOT EXISTS idx_compile_artifacts_project_id ON compile_artifacts(project_id);
 CREATE INDEX IF NOT EXISTS idx_shares_project_id ON shares(project_id);
 
 -- Update trigger for projects.updated_at
@@ -46,6 +58,12 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS projects_updated_at ON projects;
 CREATE TRIGGER projects_updated_at
     BEFORE UPDATE ON projects
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS compile_artifacts_updated_at ON compile_artifacts;
+CREATE TRIGGER compile_artifacts_updated_at
+    BEFORE UPDATE ON compile_artifacts
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at();
 
@@ -119,4 +137,11 @@ CREATE POLICY "Users can revoke shares for own projects"
 
 CREATE POLICY "Service role full access to shares"
     ON shares FOR ALL
+    USING (auth.jwt() ->> 'role' = 'service_role');
+
+-- RLS Policies for compile_artifacts
+ALTER TABLE compile_artifacts ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role full access to compile artifacts"
+    ON compile_artifacts FOR ALL
     USING (auth.jwt() ->> 'role' = 'service_role');

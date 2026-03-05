@@ -4,18 +4,21 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Union
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.compile_cache import CompileCache
+from app.compile_coordinator import CompileCoordinator
+from app.compile_orchestrator import CompileOrchestrator
 from app.config import get_settings
 from app.models import (
     CompileRequest,
     CompileSuccessResponse,
     CompileErrorResponse,
-    CompileStatus,
-    ErrorType,
     HealthResponse,
+    LatestPdfResponse,
 )
+from app.workdir_cache import WorkdirCache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,6 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _compile_semaphore: asyncio.Semaphore | None = None
+_compile_orchestrator: CompileOrchestrator | None = None
 
 
 def get_compile_semaphore() -> asyncio.Semaphore:
@@ -36,9 +40,46 @@ def get_compile_semaphore() -> asyncio.Semaphore:
     return _compile_semaphore
 
 
+def get_compile_orchestrator() -> CompileOrchestrator:
+    global _compile_orchestrator
+    if _compile_orchestrator is None:
+        settings = get_settings()
+        _compile_orchestrator = CompileOrchestrator(
+            settings=settings,
+            compile_semaphore=get_compile_semaphore(),
+            compile_cache=CompileCache(max_entries=settings.compile_cache_max_entries),
+            workdir_cache=WorkdirCache(
+                root_dir=settings.workdir_cache_root,
+                max_projects=settings.workdir_cache_max_projects,
+            ),
+            coordinator=CompileCoordinator(),
+        )
+    return _compile_orchestrator
+
+
+async def _warmup_compiler() -> None:
+    """Optional warmup compile to reduce cold-start penalties."""
+    from app.compile import run_compile
+
+    settings = get_settings()
+    warmup_tex = r"\documentclass{article}\begin{document}warmup\end{document}"
+    try:
+        await run_compile(
+            tex_content=warmup_tex,
+            timeout_seconds=min(settings.compile_timeout_seconds, 5),
+            max_log_chars=1024,
+        )
+        logger.info("Compiler warmup completed")
+    except Exception as exc:
+        logger.warning("Compiler warmup failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     get_compile_semaphore()
+    get_compile_orchestrator()
+    if get_settings().enable_startup_warmup:
+        await _warmup_compiler()
     yield
 
 
@@ -73,103 +114,31 @@ async def health_check():
 
 @app.post("/compile", response_model=Union[CompileSuccessResponse, CompileErrorResponse])
 async def compile_tex(request: CompileRequest):
-    from app.security import validate_tex_content
-    from app.compile import run_compile
-    from app.supabase_client import get_project_tex, save_compile_result, upload_pdf, create_signed_url
-
-    settings = get_settings()
     request_id = f"req-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
     logger.info(f"[{request_id}] Compile request for project_id={request.project_id}")
+    orchestrator = get_compile_orchestrator()
+    return await orchestrator.compile(request=request, request_id=request_id)
 
-    semaphore = get_compile_semaphore()
-    try:
-        async with asyncio.timeout(settings.semaphore_wait_timeout_seconds):
-            await semaphore.acquire()
-    except asyncio.TimeoutError:
-        logger.warning(f"[{request_id}] Semaphore wait timeout - too many concurrent compiles")
-        raise HTTPException(status_code=429, detail="Too many concurrent compile requests. Try again later.")
 
-    try:
-        compiled_at = datetime.now(timezone.utc)
+@app.get("/projects/{project_id}/latest-pdf", response_model=LatestPdfResponse)
+async def get_latest_project_pdf(project_id: str):
+    from app.supabase_client import get_latest_successful_compile, create_signed_url
 
-        if request.tex is not None:
-            tex_content = request.tex
-        else:
-            tex_content = await get_project_tex(request.project_id)
-            if tex_content is None:
-                return CompileErrorResponse(
-                    error_type=ErrorType.PROJECT_NOT_FOUND,
-                    log="Project not found or has no tex content",
-                    compiled_at=compiled_at,
-                )
+    settings = get_settings()
+    latest_compile = await get_latest_successful_compile(project_id)
+    if not latest_compile:
+        return LatestPdfResponse()
 
-        validation_error = validate_tex_content(tex_content, settings.max_tex_size_bytes)
-        if validation_error:
-            error_type, message = validation_error
-            await save_compile_result(
-                project_id=request.project_id,
-                status="error",
-                log=message,
-                pdf_path=None,
-            )
-            return CompileErrorResponse(
-                error_type=error_type,
-                log=message,
-                compiled_at=compiled_at,
-            )
+    pdf_path = latest_compile.get("pdf_path")
+    compiled_at = latest_compile.get("compiled_at")
+    if not pdf_path:
+        return LatestPdfResponse(compiled_at=compiled_at)
 
-        result = await run_compile(
-            tex_content=tex_content,
-            timeout_seconds=settings.compile_timeout_seconds,
-            max_log_chars=settings.max_log_response_chars,
-        )
+    pdf_url = await create_signed_url(pdf_path, expires_in=settings.signed_url_ttl_seconds)
+    if not pdf_url:
+        return LatestPdfResponse(compiled_at=compiled_at)
 
-        if result["success"]:
-            pdf_path = f"{request.project_id}/latest.pdf"
-            upload_success = await upload_pdf(result["pdf_bytes"], pdf_path)
-
-            if not upload_success:
-                await save_compile_result(
-                    project_id=request.project_id,
-                    status="error",
-                    log="Failed to upload PDF to storage",
-                    pdf_path=None,
-                )
-                return CompileErrorResponse(
-                    error_type=ErrorType.STORAGE_ERROR,
-                    log="Failed to upload PDF to storage",
-                    compiled_at=compiled_at,
-                )
-
-            await save_compile_result(
-                project_id=request.project_id,
-                status="success",
-                log=result["full_log"],
-                pdf_path=pdf_path,
-            )
-
-            pdf_url = await create_signed_url(pdf_path)
-            logger.info(f"[{request_id}] Compile successful for project_id={request.project_id}")
-
-            return CompileSuccessResponse(
-                pdf_url=pdf_url,
-                compiled_at=compiled_at,
-            )
-        else:
-            await save_compile_result(
-                project_id=request.project_id,
-                status="error",
-                log=result["full_log"],
-                pdf_path=None,
-            )
-
-            logger.info(f"[{request_id}] Compile failed for project_id={request.project_id}: {result['error_type']}")
-
-            return CompileErrorResponse(
-                error_type=result["error_type"],
-                log=result["truncated_log"],
-                compiled_at=compiled_at,
-            )
-
-    finally:
-        semaphore.release()
+    return LatestPdfResponse(
+        pdf_url=pdf_url,
+        compiled_at=compiled_at,
+    )

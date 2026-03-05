@@ -24,7 +24,9 @@ CREATE POLICY "Service role can update PDFs"
     );
 
 -- Policy for users to read PDFs of their own projects
--- Path format: {project_id}/latest.pdf
+-- Path formats:
+-- - {project_id}/latest.pdf
+-- - {project_id}/artifacts/{compile_key}.pdf
 CREATE POLICY "Users can read own project PDFs"
     ON storage.objects FOR SELECT
     USING (

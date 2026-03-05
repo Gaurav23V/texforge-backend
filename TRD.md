@@ -538,6 +538,80 @@ The MVP is complete when:
 
 ---
 
+# 19. Performance Overhaul Implementation Notes
+
+The current implementation includes the following performance-oriented architecture beyond the original MVP baseline:
+
+## 19.1 Compile Orchestration
+
+- Compile requests are handled through a dedicated orchestrator layer.
+- Stage timings are collected for:
+  - `fetch`
+  - `validate`
+  - `cache_lookup`
+  - `queue_wait`
+  - `compile`
+  - `upload`
+  - `db_save`
+  - `sign`
+  - `total`
+
+## 19.2 Source-of-Truth and Request Semantics
+
+- Compile endpoint accepts inline `tex`.
+- When inline `tex` is present, it is used as source-of-truth (no DB fetch).
+- Empty inline `tex` is treated as validation error.
+
+## 19.3 Concurrency and Queueing
+
+- Semaphore scope is compile-only (DB/storage/signing are outside compile slots).
+- Queue wait timeout still returns HTTP 429 when contention exceeds threshold.
+- Per-project in-flight coordination:
+  - coalesces identical requests
+  - cancels stale same-project requests when newer content arrives
+
+## 19.4 Engine Strategy
+
+- Adaptive strategy prefers `pdflatex` (2-pass) for fast preview.
+- Falls back to `latexmk` on compile errors where rerun logic is beneficial.
+- Security flags remain enforced (`-no-shell-escape`, `-halt-on-error`, etc.).
+
+## 19.5 Caching
+
+- Content-hash compile cache key includes:
+  - `project_id`
+  - `tex`
+  - engine strategy flags
+  - toolchain marker
+- Cache hit bypasses compile and upload steps.
+- Metadata persistence in `compile_artifacts` supports warm restart recovery.
+
+## 19.6 Workdir Reuse
+
+- Per-project persistent workdirs retain LaTeX intermediates (`.aux`, `.toc`, `.fdb_latexmk`).
+- LRU eviction with safety checks avoids deleting active workdirs.
+
+## 19.7 Storage Paths
+
+- Immutable artifact path:
+  - `project-pdfs/{project_id}/artifacts/{compile_key}.pdf`
+- Latest alias path:
+  - `project-pdfs/{project_id}/latest.pdf`
+- Compile history rows keep a project-stable path for share/view flows.
+
+## 19.8 Cold Start Mitigation
+
+- Optional startup warmup compile is available behind feature flag.
+- Intended to reduce first-request compile latency after idle periods.
+
+## 19.9 Frontend UX Performance
+
+- Compile requests send inline editor buffer.
+- Client-side compile request coalescing and cancellation enforce latest-wins behavior.
+- PDF preview adds cache-busting query parameter on each successful compile response.
+
+---
+
 # Final Recommendation
 
 Do NOT overengineer queues or scaling yet.
