@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Union
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.compile_cache import CompileCache
@@ -17,6 +17,7 @@ from app.models import (
     CompileErrorResponse,
     HealthResponse,
     LatestPdfResponse,
+    SharePdfResponse,
 )
 from app.workdir_cache import WorkdirCache
 
@@ -140,5 +141,34 @@ async def get_latest_project_pdf(project_id: str):
 
     return LatestPdfResponse(
         pdf_url=pdf_url,
+        compiled_at=compiled_at,
+    )
+
+
+@app.get("/shares/{token}", response_model=SharePdfResponse)
+async def get_shared_project_pdf(token: str):
+    from app.supabase_client import get_share_project, get_latest_successful_compile, create_signed_url
+
+    settings = get_settings()
+    share_project = await get_share_project(token)
+    if not share_project:
+        raise HTTPException(status_code=404, detail="Share not found")
+
+    latest_compile = await get_latest_successful_compile(share_project["project_id"])
+    if not latest_compile:
+        return SharePdfResponse(project_name=share_project["project_name"])
+
+    pdf_path = latest_compile.get("pdf_path")
+    compiled_at = latest_compile.get("compiled_at")
+    if not pdf_path:
+        return SharePdfResponse(
+            project_name=share_project["project_name"],
+            compiled_at=compiled_at,
+        )
+
+    pdf_url = await create_signed_url(pdf_path, expires_in=settings.signed_url_ttl_seconds)
+    return SharePdfResponse(
+        project_name=share_project["project_name"],
+        pdf_url=pdf_url or None,
         compiled_at=compiled_at,
     )

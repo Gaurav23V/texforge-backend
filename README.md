@@ -26,6 +26,7 @@ LaTeX to PDF compilation service for TexForge. Accepts LaTeX source, compiles it
 
 - **GET /health**: Health check endpoint
 - **GET /projects/{project_id}/latest-pdf**: Returns signed URL for latest successful compile (if available)
+- **GET /shares/{token}**: Resolves a public share token to the latest successful compiled PDF without compiling on open
 
 ## Quick Start
 
@@ -180,11 +181,27 @@ curl -X POST http://localhost:8000/compile \
 curl "http://localhost:8000/projects/550e8400-e29b-41d4-a716-446655440000/latest-pdf"
 ```
 
+### Fetch shared PDF view data
+
+```bash
+curl "http://localhost:8000/shares/QZCW4ZX9nsJpi0nL"
+```
+
 ### Success Response
 
 ```json
 {
   "status": "success",
+  "pdf_url": "https://storage.supabase.co/.../latest.pdf?token=...",
+  "compiled_at": "2024-01-15T10:30:00Z"
+}
+```
+
+Shared PDF response:
+
+```json
+{
+  "project_name": "Resume",
   "pdf_url": "https://storage.supabase.co/.../latest.pdf?token=...",
   "compiled_at": "2024-01-15T10:30:00Z"
 }

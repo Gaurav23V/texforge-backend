@@ -46,3 +46,9 @@ class HealthResponse(BaseModel):
 class LatestPdfResponse(BaseModel):
     pdf_url: Optional[str] = None
     compiled_at: Optional[datetime] = None
+
+
+class SharePdfResponse(BaseModel):
+    project_name: str
+    pdf_url: Optional[str] = None
+    compiled_at: Optional[datetime] = None

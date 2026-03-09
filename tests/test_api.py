@@ -102,3 +102,48 @@ class TestLatestPdfEndpoint:
         data = response.json()
         assert data["pdf_url"] is None
         assert data["compiled_at"] is None
+
+
+class TestSharePdfEndpoint:
+    def test_share_pdf_returns_signed_url(self, client):
+        with patch("app.supabase_client.get_share_project", new=AsyncMock(return_value={
+            "project_id": "project-1",
+            "project_name": "Shared Resume",
+        })), patch("app.supabase_client.get_latest_successful_compile", new=AsyncMock(return_value={
+            "pdf_path": "project-1/latest.pdf",
+            "compiled_at": "2026-03-04T10:00:00Z",
+        })), patch("app.supabase_client.create_signed_url", new=AsyncMock(return_value="https://signed.example/shared.pdf")):
+            response = client.get("/shares/share-token-123")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["project_name"] == "Shared Resume"
+        assert data["pdf_url"] == "https://signed.example/shared.pdf"
+        assert data["compiled_at"] == "2026-03-04T10:00:00Z"
+
+    def test_share_pdf_returns_empty_when_no_compile(self, client):
+        with patch("app.supabase_client.get_share_project", new=AsyncMock(return_value={
+            "project_id": "project-1",
+            "project_name": "Shared Resume",
+        })), patch("app.supabase_client.get_latest_successful_compile", new=AsyncMock(return_value=None)):
+            response = client.get("/shares/share-token-123")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["project_name"] == "Shared Resume"
+        assert data["pdf_url"] is None
+        assert data["compiled_at"] is None
+
+    def test_share_pdf_returns_404_for_invalid_token(self, client):
+        with patch("app.supabase_client.get_share_project", new=AsyncMock(return_value=None)):
+            response = client.get("/shares/missing-token")
+
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Share not found"}
+
+    def test_share_pdf_returns_404_for_revoked_token(self, client):
+        with patch("app.supabase_client.get_share_project", new=AsyncMock(return_value=None)):
+            response = client.get("/shares/revoked-token")
+
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Share not found"}

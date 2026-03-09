@@ -73,6 +73,36 @@ async def create_signed_url(path: str, expires_in: int = 3600) -> str:
         return ""
 
 
+async def get_share_project(token: str) -> Optional[dict]:
+    """Fetch a non-revoked share token and its project name."""
+    try:
+        share_response = await asyncio.to_thread(_get_share_project_sync, token)
+        share_data = share_response.data if share_response else None
+        if not isinstance(share_data, dict):
+            return None
+
+        project_id = share_data.get("project_id")
+        if not project_id:
+            return None
+
+        project_response = await asyncio.to_thread(_get_project_name_sync, project_id)
+        project_data = project_response.data if project_response else None
+        if not isinstance(project_data, dict):
+            return None
+
+        project_name = project_data.get("name")
+        if not isinstance(project_name, str) or not project_name.strip():
+            project_name = "Untitled project"
+
+        return {
+            "project_id": project_id,
+            "project_name": project_name,
+        }
+    except Exception as e:
+        logger.warning(f"Failed to fetch share token {token}: {e}")
+        return None
+
+
 async def get_compile_artifact(compile_key: str) -> Optional[dict]:
     global _compile_artifacts_table_available
     if _compile_artifacts_table_available is False:
@@ -163,6 +193,23 @@ def _upload_pdf_sync(pdf_bytes: bytes, path: str):
 def _create_signed_url_sync(path: str, expires_in: int):
     client = get_supabase_client()
     return client.storage.from_("project-pdfs").create_signed_url(path, expires_in)
+
+
+def _get_share_project_sync(token: str):
+    client = get_supabase_client()
+    return (
+        client.table("shares")
+        .select("project_id")
+        .eq("token", token)
+        .is_("revoked_at", "null")
+        .single()
+        .execute()
+    )
+
+
+def _get_project_name_sync(project_id: str):
+    client = get_supabase_client()
+    return client.table("projects").select("name").eq("id", project_id).single().execute()
 
 
 def _get_compile_artifact_sync(compile_key: str):
